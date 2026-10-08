@@ -1,0 +1,9 @@
+{
+  "name": "予定一括登録",
+  "short_name": "予定一括登録",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f9fa",
+  "theme_color": "#a9cbd8",
+  "icons": [{"src":"icon-180.png","sizes":"180x180","type":"image/png","purpose":"any maskable"}]
+}
