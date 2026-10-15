@@ -193,7 +193,7 @@ const firebaseConfig = {
   appId: "1:50660167191:web:57213e65ed25d3438a1652",
   measurementId: "G-XSMQB9V48N"
 };
-let fbAuth=null, fbDb=null, syncUser=null, syncReady=false, syncInitializing=false, cloudSaveTimer=null, cloudUnsubscribe=null, lastCloudJson='', cloudDirty=false, localChangeVersion=0, bootLocalChangeVersion=0, cloudWriteInProgress=false;
+let fbAuth=null, fbDb=null, syncUser=null, syncReady=false, syncInitializing=false, cloudSaveTimer=null, cloudUnsubscribe=null, lastCloudJson='', cloudDirty=false, localChangeVersion=0, bootLocalChangeVersion=0, cloudWriteInProgress=false, pendingNfcAction=null;
 function syncStatus(text){const el=document.getElementById('syncStatus');if(el)el.textContent=text}
 function syncNote(text){const el=document.getElementById('syncNote');if(el)el.textContent=text}
 function currentAppData(){return {flows,logs,prefs,nfcTags,updatedAt:Date.now()}}
@@ -249,10 +249,17 @@ function scheduleCloudSave(){
     finally{cloudWriteInProgress=false;if(cloudDirty&&localChangeVersion!==versionAtStart)scheduleCloudSave()}
   },500);
 }
+function runPendingNfcAction(){
+  if(!pendingNfcAction||!syncReady)return;
+  const action=pendingNfcAction;pendingNfcAction=null;
+  // Run the NFC action only after the initial cloud snapshot has been applied,
+  // so an older snapshot cannot immediately undo the state change.
+  setTimeout(()=>{if(action.nfc)handleNfcTag(action.nfc);else if(action.fid&&action.tag)onTag(action.fid,action.tag)},0);
+}
 async function initializeCloudSync(user){
   if(cloudUnsubscribe){cloudUnsubscribe();cloudUnsubscribe=null}
   syncUser=user;syncReady=false;syncInitializing=true;lastCloudJson='';cloudDirty=false;bootLocalChangeVersion=localChangeVersion;cloudWriteInProgress=false;
-  if(!user){syncInitializing=false;syncStatus('未ログイン・この端末に保存中');document.getElementById('syncAuthControls').hidden=false;document.getElementById('syncSignedControls').hidden=true;syncNote('ログインすると習慣の設定・NFCタグ・完了履歴を同期できます。タイマーと進行中の工程はこの端末だけで管理します。');return}
+  if(!user){syncInitializing=false;syncReady=true;syncStatus('未ログイン・この端末に保存中');document.getElementById('syncAuthControls').hidden=false;document.getElementById('syncSignedControls').hidden=true;syncNote('ログインすると習慣の設定・NFCタグ・完了履歴を同期できます。タイマーと進行中の工程はこの端末だけで管理します。');runPendingNfcAction();return}
   document.getElementById('syncAuthControls').hidden=true;document.getElementById('syncSignedControls').hidden=false;document.getElementById('syncUserEmail').textContent=user.email||'ログイン中';
   syncStatus('クラウドを確認中…');syncNote('保存済みデータを確認しています。画面を閉じずに少し待ってね。');
   const ref=fbDb.doc(`users/${user.uid}/appData/main`);
@@ -285,6 +292,7 @@ async function initializeCloudSync(user){
         }
         syncReady=true;syncInitializing=false;
         if(cloudDirty)scheduleCloudSave();
+        runPendingNfcAction();
         return;
       }
       if(snap.metadata&&snap.metadata.hasPendingWrites)return;
@@ -578,7 +586,7 @@ document.getElementById('main').addEventListener('click',e=>{let pb=e.target.clo
 document.getElementById('main').addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&e.target.matches('.clickable-card')){e.preventDefault();showDetail(e.target.dataset.id)}});
 document.getElementById('main').addEventListener('change',e=>{if(e.target.dataset.energy!==undefined)prefs.energy[e.target.dataset.energy]=Number(e.target.value);if(e.target.id==='importFile'&&e.target.files[0]){let r=new FileReader();r.onload=()=>{try{let d=JSON.parse(r.result);if(Array.isArray(d.flows))flows=d.flows;if(Array.isArray(d.logs))logs=d.logs;if(d.prefs)prefs=d.prefs;save();render();toast('データを読み込んだよ')}catch(err){toast('読み込みに失敗したよ')}};r.readAsText(e.target.files[0])}});
 document.getElementById('notifyBtn')?.addEventListener('click',async()=>{if(!('Notification'in window)){toast('このブラウザは通知APIに対応していないよ');return}let p=await Notification.requestPermission();document.getElementById('notifyStatus').textContent='現在：'+p;toast(p==='granted'?'通知を許可したよ':'通知は許可されなかったよ')});
-function handleNfcUrl(){let p=new URLSearchParams(location.search),nfc=p.get('nfc'),fid=p.get('flow'),tag=p.get('tag');if(nfc){history.replaceState({},'',location.pathname);setTimeout(()=>handleNfcTag(nfc),350)}else if(fid&&tag){history.replaceState({},'',location.pathname);setTimeout(()=>onTag(fid,tag),350)}}
+function handleNfcUrl(){let p=new URLSearchParams(location.search),nfc=p.get('nfc'),fid=p.get('flow'),tag=p.get('tag');if(nfc){history.replaceState({},'',location.pathname);pendingNfcAction={nfc}}else if(fid&&tag){history.replaceState({},'',location.pathname);pendingNfcAction={fid,tag}}if(pendingNfcAction&&syncReady)runPendingNfcAction()}
 function resetFlow(f){logs=logs.filter(x=>x.flowId!==f.id);f.activeStep=0;f.state='idle';f.timerStartedAt=0;f.timerEndsAt=0;f.stepStartedAt=0;f.notified=false;f.completedSteps=[];f.completionNotice=null;f.pausedElapsed=0;f.pausedRemaining=0;f.pausedMode='';f.lastDate=''}
 document.getElementById('appDialogForm').addEventListener('submit',e=>{e.preventDefault();let close=appDialogHandler?.onSubmit?.();if(close!==false)document.getElementById('appDialog').close()});document.getElementById('appDialogCancel').addEventListener('click',()=>{appDialogHandler?.onCancel?.();document.getElementById('appDialog').close()});document.getElementById('appDialogClose').addEventListener('click',()=>document.getElementById('appDialog').close());
 document.getElementById('routineType').addEventListener('change',updateRoutineType);document.getElementById('onceMode').addEventListener('change',syncStepTimerControls);document.getElementById('stepsEditor').addEventListener('change',e=>{if(e.target.matches('[data-field="mode"]'))syncStepTimerControls()});document.getElementById('saveFlowTop').addEventListener('click',e=>{e.preventDefault();clearFlowFormError();document.getElementById('flowForm').requestSubmit()});document.getElementById('flowIcon').addEventListener('change',()=>document.getElementById('emojiPreview').textContent=document.getElementById('flowIcon').value);document.getElementById('flowEmojiFile').addEventListener('change',e=>{let file=e.target.files?.[0];if(!file)return;if(file.type!=='image/png'){toast('PNG画像を選んでね');return}let r=new FileReader();r.onload=()=>{document.getElementById('emojiPreview').innerHTML=`<img src="${r.result}">`;document.getElementById('flowForm').dataset.iconData=r.result};r.readAsDataURL(file)});
