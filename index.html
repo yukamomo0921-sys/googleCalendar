@@ -232,7 +232,7 @@ function scheduleCloudSave(){
 }
 async function initializeCloudSync(user){
   if(cloudUnsubscribe){cloudUnsubscribe();cloudUnsubscribe=null}
-  syncUser=user;syncReady=false;syncInitializing=true;lastCloudJson='';cloudDirty=false;localChangeVersion=0;cloudWriteInProgress=false;
+  syncUser=user;syncReady=false;syncInitializing=true;lastCloudJson='';cloudDirty=false;bootLocalChangeVersion=localChangeVersion;cloudWriteInProgress=false;
   if(!user){syncInitializing=false;syncStatus('未ログイン・この端末に保存中');document.getElementById('syncAuthControls').hidden=false;document.getElementById('syncSignedControls').hidden=true;syncNote('ログインすると、この端末の家事・ポイント・履歴をクラウドに保存して他の端末と同期できます。');return}
   document.getElementById('syncAuthControls').hidden=true;document.getElementById('syncSignedControls').hidden=false;document.getElementById('syncUserEmail').textContent=user.email||'ログイン中';
   syncStatus('クラウドを確認中…');syncNote('保存済みデータを確認しています。画面を閉じずに少し待ってね。');
