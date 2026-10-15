@@ -197,10 +197,29 @@ let fbAuth=null, fbDb=null, syncUser=null, syncReady=false, syncInitializing=fal
 function syncStatus(text){const el=document.getElementById('syncStatus');if(el)el.textContent=text}
 function syncNote(text){const el=document.getElementById('syncNote');if(el)el.textContent=text}
 function currentAppData(){return {flows,logs,prefs,nfcTags,updatedAt:Date.now()}}
-function normalizedAppData(d){return JSON.stringify({flows:d.flows||[],logs:d.logs||[],prefs:d.prefs||{},nfcTags:d.nfcTags||[]})}
+// Cloud stores routine definitions and completed records, never live execution state.
+const LOCAL_PROGRESS_KEYS=['activeStep','state','timerStartedAt','timerEndsAt','stepStartedAt','completedSteps','pausedElapsed','pausedRemaining','pausedMode','completionNotice','notified'];
+function cloudFlow(f){const copy={...f};LOCAL_PROGRESS_KEYS.forEach(k=>delete copy[k]);return copy}
+function cloudAppData(){return {flows:flows.map(cloudFlow),logs,prefs,nfcTags,updatedAt:Date.now()}}
+function normalizedAppData(d){return JSON.stringify({flows:(d.flows||[]).map(cloudFlow),logs:d.logs||[],prefs:d.prefs||{},nfcTags:d.nfcTags||[]})}
+function mergeCloudFlows(incoming){
+  const localById=new Map(flows.map(f=>[f.id,f]));
+  return (Array.isArray(incoming)?incoming:[]).map(remote=>{
+    const local=localById.get(remote.id);
+    if(!local)return {...remote,activeStep:0,state:'idle',timerStartedAt:0,timerEndsAt:0,stepStartedAt:0,completedSteps:[],pausedElapsed:0,pausedRemaining:0,pausedMode:'',completionNotice:null,notified:false};
+    const merged={...local,...remote};
+    LOCAL_PROGRESS_KEYS.forEach(k=>{if(Object.prototype.hasOwnProperty.call(local,k))merged[k]=local[k]});
+    return merged;
+  });
+}
+function mergeCloudLogs(incoming){
+  const byId=new Map();
+  [...(Array.isArray(incoming)?incoming:[]),...(Array.isArray(logs)?logs:[])].forEach(x=>{if(x&&x.id)byId.set(x.id,x)});
+  return [...byId.values()].sort((a,b)=>String(b.completedAt||'').localeCompare(String(a.completedAt||'')));
+}
 function applyCloudData(d){
-  flows=Array.isArray(d.flows)?d.flows:flows;
-  logs=Array.isArray(d.logs)?d.logs:logs;
+  if(Array.isArray(d.flows))flows=mergeCloudFlows(d.flows);
+  if(Array.isArray(d.logs))logs=mergeCloudLogs(d.logs);
   prefs=Object.assign({},prefs,d.prefs||{});
   nfcTags=Array.isArray(d.nfcTags)?d.nfcTags:nfcTags;
   localStorage.setItem(DB,JSON.stringify(flows));
@@ -218,7 +237,7 @@ function scheduleCloudSave(){
   cloudSaveTimer=setTimeout(async()=>{
     const versionAtStart=localChangeVersion;
     try{
-      const data=currentAppData(), normalized=normalizedAppData(data);
+      const data=cloudAppData(), normalized=normalizedAppData(data);
       if(normalized===lastCloudJson){cloudDirty=false;return;}
       cloudWriteInProgress=true;
       await fbDb.doc(`users/${syncUser.uid}/appData/main`).set(data);
@@ -233,7 +252,7 @@ function scheduleCloudSave(){
 async function initializeCloudSync(user){
   if(cloudUnsubscribe){cloudUnsubscribe();cloudUnsubscribe=null}
   syncUser=user;syncReady=false;syncInitializing=true;lastCloudJson='';cloudDirty=false;bootLocalChangeVersion=localChangeVersion;cloudWriteInProgress=false;
-  if(!user){syncInitializing=false;syncStatus('未ログイン・この端末に保存中');document.getElementById('syncAuthControls').hidden=false;document.getElementById('syncSignedControls').hidden=true;syncNote('ログインすると、この端末の家事・ポイント・履歴をクラウドに保存して他の端末と同期できます。');return}
+  if(!user){syncInitializing=false;syncStatus('未ログイン・この端末に保存中');document.getElementById('syncAuthControls').hidden=false;document.getElementById('syncSignedControls').hidden=true;syncNote('ログインすると習慣の設定・NFCタグ・完了履歴を同期できます。タイマーと進行中の工程はこの端末だけで管理します。');return}
   document.getElementById('syncAuthControls').hidden=true;document.getElementById('syncSignedControls').hidden=false;document.getElementById('syncUserEmail').textContent=user.email||'ログイン中';
   syncStatus('クラウドを確認中…');syncNote('保存済みデータを確認しています。画面を閉じずに少し待ってね。');
   const ref=fbDb.doc(`users/${user.uid}/appData/main`);
@@ -257,11 +276,11 @@ async function initializeCloudSync(user){
           syncStatus(localChangedDuringBoot?'☁️ 変更を保存中…':'☁️ 同期済み');
           syncNote(localChangedDuringBoot?'同期の初期読み込み中に行った操作をクラウドへ保存しています。':'クラウドのデータを読み込みました。iPhoneとMacで同じアカウントを使ってね。');
         }else{
-          const d=currentAppData();
+          const d=cloudAppData();
           await ref.set(d);
           lastCloudJson=normalizedAppData(d);
           syncStatus('☁️ 初回データを保存済み');
-          syncNote('この端末の既存データをクラウドに保存しました。別の端末でも同じアカウントでログインしてね。');
+          syncNote('この端末の習慣設定・NFCタグ・完了履歴をクラウドに保存しました。同じアカウントの端末で共有できます。');
           cloudDirty=false;
         }
         syncReady=true;syncInitializing=false;
@@ -273,10 +292,10 @@ async function initializeCloudSync(user){
         const d=snap.data()||{}, normalized=normalizedAppData(d);
         // Never replace an unsaved local action (e.g. an NFC scan) with a stale snapshot from another device.
         if(cloudDirty){
-          if(normalized!==normalizedAppData(currentAppData()))scheduleCloudSave();
+          if(normalized!==normalizedAppData(cloudAppData()))scheduleCloudSave();
           return;
         }
-        if(normalized!==normalizedAppData(currentAppData())){
+        if(normalized!==normalizedAppData(cloudAppData())){
           syncInitializing=true;applyCloudData(d);syncInitializing=false;
         }
         lastCloudJson=normalized;
